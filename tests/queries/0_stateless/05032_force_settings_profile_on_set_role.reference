@@ -1,0 +1,64 @@
+### 1. Overwrite an explicit session SET and apply the new role's profile
+999
+111
+1
+### 2. Switch role_a -> role_b applies role_b's profile
+222
+1
+### 3. SET ROLE NONE resets role-managed settings
+1
+0
+### 4. SET ROLE DEFAULT applies the default roles' profile
+333
+1
+### 5. Stale-profile cleanup: settings of the previous role revert to defaults
+5678
+222
+65409
+### 6. Constraints are replaced, not merged (role_a MAX=200 <-> role_b value 222)
+222
+999
+111
+-- SET max_result_rows = 999 under role_a must fail with a constraint violation:
+Code: 452 (expected Code: 452)
+### 7. readonly guard (readonly = 1): SET ROLE fails, session intact
+-- SET ROLE role_a with readonly = 1 must fail with READONLY:
+Code: 164 (expected Code: 164)
+-- role and settings unchanged after the failed SET ROLE:
+1
+777
+### 8. readonly guard (readonly = 2): SET ROLE fails the same way
+Code: 164 (expected Code: 164)
+### 9. A profile setting readonly=1 locks out further SET ROLE (fail-closed)
+1
+-- any further SET ROLE now fails with READONLY (even SET ROLE DEFAULT):
+Code: 164 (expected Code: 164)
+### 10. Non-granted role: fails before settings are touched
+Code: 512 (expected Code: 512)
+-- settings are unchanged after the failed SET ROLE:
+999
+1
+### 11. Flag self-preservation across SET ROLE switches
+true
+222
+### 12. Default off: explicit session SET survives SET ROLE (unchanged behavior)
+999
+### 13. Custom settings are reset by SET ROLE too
+5
+-- getSetting('custom_qux') after SET ROLE (expected: UNKNOWN_SETTING):
+Code: 115 (expected Code: 115)
+### 14. HTTP GET forces readonly=2 on the query context: SET ROLE fails closed
+-- GET (readonly=2 implied) with the flag enabled per-request:
+Code: 164
+-- GET (readonly=2 implied), flag enabled via session: still READONLY:
+Code: 164
+### 15. HTTP POST with ?readonly=1 URL param: guard sees the per-request value
+-- POST with the flag and readonly=1 (per-request): SET ROLE fails with READONLY:
+Code: 164
+-- the same POST without readonly: SET ROLE succeeds:
+ok
+-- and the profile was applied to the session (max_result_rows = 222):
+222
+### 16. Flag off (default): SET ROLE performs no readonly check (existing behavior)
+-- SET readonly = 1 then SET ROLE role_b succeeds today (only SET, not SET ROLE, checks readonly):
+333

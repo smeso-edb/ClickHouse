@@ -8,6 +8,8 @@ namespace DB
 {
 
 class ASTSetRoleQuery;
+class AccessControl;
+class Context;
 struct RolesOrUsersSet;
 struct User;
 
@@ -19,10 +21,18 @@ public:
     BlockIO execute() override;
 
     static void updateUserSetDefaultRoles(User & user, const RolesOrUsersSet & roles_from_query);
+    static void applySettingsProfileAndSetCurrentRoles(Context & target_context, const std::vector<UUID> & new_roles);
 
 private:
     void setRole(const ASTSetRoleQuery & query);
     void setDefaultRole(const ASTSetRoleQuery & query);
+
+    static void applyRoleSettingsProfile(
+        Context & target_context,
+        AccessControl & access_control,
+        const UUID & user_id,
+        const User & user,
+        const std::vector<UUID> & new_roles);
 
     ASTPtr query_ptr;
 };

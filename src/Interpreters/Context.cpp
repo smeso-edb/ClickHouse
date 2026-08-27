@@ -3429,6 +3429,26 @@ void Context::applySettingsChanges(const SettingsChanges & changes)
     applySettingsChangesWithLock(changes, lock);
 }
 
+void Context::applySettingsAndReplaceProfiles(
+    const SettingsChanges & changes,
+    std::shared_ptr<const SettingsConstraintsAndProfileIDs> constraints_and_profiles)
+{
+    std::lock_guard lock(mutex);
+
+    for (const auto & change : settings->changes())
+    {
+        if (change.name != "force_settings_profile_on_set_role")
+            settings->setDefaultValue(change.name);
+    }
+
+    applySettingsChangesWithLock(changes, lock);
+
+    // Replace, do not merge, constraints and current profile IDs
+    settings_constraints_and_current_profiles = std::move(constraints_and_profiles);
+
+    contextSanityClampSettingsWithLock(*this, *settings, lock);
+}
+
 void Context::checkSettingsConstraintsWithLock(const AlterSettingsProfileElements & profile_elements, SettingSource source)
 {
     getSettingsConstraintsAndCurrentProfilesWithLock()->constraints.check(*settings, profile_elements, source);

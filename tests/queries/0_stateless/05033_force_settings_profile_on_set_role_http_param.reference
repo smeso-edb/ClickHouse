@@ -1,0 +1,84 @@
+### 1. Flag on via URL param: the new role's profile is applied to the request
+111
+05033_force_settings_profile_on_set_role_http_param_default_role_a
+### 2. Explicit URL setting is overwritten by the new role's profile
+111
+### 3. Flag off (default): explicit URL setting survives (unchanged behavior)
+999
+### 4. GET request with the flag and a role parameter fails with READONLY (readonly=2 implied)
+Code: 164 (expected Code: 164)
+### 5. POST with ?readonly=1, the flag and a role parameter fails with READONLY
+Code: 164 (expected Code: 164)
+### 6. Non-granted role fails with SET_NON_GRANTED_ROLE
+Code: 512 (expected Code: 512)
+### 7. Unknown role name fails with UNKNOWN_ROLE
+Code: 511 (expected Code: 511)
+### 8. Multiple role parameters: the merged profile is applied
+-- role_a and role_b each manage their own setting; both must be in force:
+678
+345
+05033_force_settings_profile_on_set_role_http_param_default_role_a
+05033_force_settings_profile_on_set_role_http_param_default_role_b
+### 8b. Profile-managed readonly applies for the rest of the request (POST only)
+-- ?role=role_ro with the flag: the new role's profile replaces the old roles' readonly = 0:
+1
+-- a query-level change of a non-readonly-changeable setting in the same request fails READONLY:
+Code: 164 (expected Code: 164)
+### 9. Session isolation: the role parameter does not persist roles or settings
+-- request with the role parameter and the flag (role_a's profile: 111):
+111
+-- follow-up request without the role parameter: default role and the session's own setting (888):
+888
+05033_force_settings_profile_on_set_role_http_param_default_role_default
+### 10. Flag enabled in the session, role parameter only in the URL: profile applied
+111
+### 11. Stale per-request settings are reset by the switch (max_block_size not managed by profile B)
+-- ?max_block_size=5678 with role_b: the stale value is reset (getSetting != 5678):
+1
+### 12. Constraints are replaced: query-level settings are checked against the new role's constraints
+-- within the new constraint (max_result_rows = 150 < 200): succeeds:
+300
+-- over the new constraint (max_result_rows = 250 > 200): fails with a constraint violation:
+Code: 452 (expected Code: 452)
+### 13. Constraint-check ordering (documented limitation): URL settings are checked against the pre-role constraints
+-- user2's default profile constrains max_execution_time MAX 10; the new role (role_b) does not manage it.
+-- ?max_execution_time=20 is checked against the old (constrained) profile and fails even though role_b would not constrain it:
+Code: 452 (expected Code: 452)
+### 14. Response-shaping settings are overwritten by the new role's profile
+-- ?default_format=TabSeparated is overwritten by role_fmt's default_format=JSONEachRow:
+{"1":1}
+-- X-ClickHouse-Format: TabSeparated (output_format) is overwritten by role_fmt's default_format=JSONEachRow:
+{"1":1}
+-- ?database=system is overwritten by role_fmt's database=<the test database> (the response
+-- itself comes in the profile's default_format=JSONEachRow, like the two cases above):
+{"currentDatabase()":"default"}
+### 15. Path-derived format still wins over the new role's profile
+-- POST /<the test database>/<table>.CSV with role_fmt (default_format=JSONEachRow): the path wins, output is CSV
+-- (POST, not GET: a GET would hit the READONLY guard, like scenario 4):
+1,"one"
+2,"two"
+### 16. Error precedence with the flag off: URL settings are validated before the role parameter
+-- bad setting value + unknown role: the setting error comes first now:
+Code: 27 (expected Code: 27)
+-- constraint violation + unknown role: the setting error comes first now:
+Code: 452 (expected Code: 452)
+-- unknown setting name + unknown role: still the role error (an unknown setting name is
+-- applied after the role handling):
+Code: 511 (expected Code: 511)
+-- plain unknown role (no other settings): still UNKNOWN_ROLE:
+Code: 511 (expected Code: 511)
+### 17. SQL-defined handler: the parse-limit workaround survives a flag-on role switch
+-- A handler endpoint pins max_parser_depth/max_parser_backtracks to 0 on the query context so the
+-- stored query parses with unlimited limits. A flag-on role switch resets every changed setting
+-- (incl. that 0) to its default via applySettingsAndReplaceProfiles; the implementation must
+-- snapshot the effective values after the URL settings and re-apply them after the switch.
+-- (POST only: a GET would hit the READONLY guard, like scenario 4.)
+-- flag-off control (no role parameter): the handler's max_parser_depth = 0 workaround is in effect:
+0
+-- flag on + role parameter: the switch resets changed settings; the snapshot/restore must bring
+-- the handler's 0 back instead of leaving the default (1000):
+0
+-- a client per-request override (?max_parser_depth=500, distinct from the default 1000 so a
+-- reset to default is distinguishable) also survives the switch: the snapshot is taken after the
+-- URL settings are applied:
+500

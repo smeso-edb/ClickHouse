@@ -16,7 +16,9 @@
 #include <Common/setThreadName.h>
 #include "config.h"
 
+#include <Access/AccessControl.h>
 #include <Access/Credentials.h>
+#include <Access/Role.h>
 #include <Common/CurrentThread.h>
 #include <Common/StringUtils.h>
 #include <Common/QueryScope.h>
@@ -25,6 +27,7 @@
 #include <IO/ZstdInflatingReadBuffer.h>
 #include <IO/Protobuf/ProtobufZeroCopyInputStreamFromReadBuffer.h>
 #include <IO/Protobuf/ProtobufZeroCopyOutputStreamFromWriteBuffer.h>
+#include <Interpreters/Access/InterpreterSetRoleQuery.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/DatabaseCatalog.h>
 #include <Interpreters/Session.h>
@@ -45,7 +48,9 @@ namespace DB
 
 namespace Setting
 {
+    extern const SettingsBool force_settings_profile_on_set_role;
     extern const SettingsUInt64 http_response_buffer_size;
+    extern const SettingsUInt64 readonly;
 }
 
 namespace ErrorCodes
@@ -54,6 +59,7 @@ namespace ErrorCodes
     extern const int CANNOT_WRITE_TO_OSTREAM;
     extern const int SUPPORT_IS_DISABLED;
     extern const int NOT_IMPLEMENTED;
+    extern const int READONLY;
     extern const int UNSUPPORTED_MEDIA_TYPE;
 }
 
@@ -206,8 +212,6 @@ protected:
         setReadOnlyIfHTTPMethodIdempotent(context, request.getMethod());
 
         auto roles = params->getAll("role");
-        if (!roles.empty())
-            context->setCurrentRoles(roles);
 
         SettingsChanges settings_changes;
         for (const auto & [key, value] : *params)
@@ -221,6 +225,27 @@ protected:
 
         context->checkSettingsConstraints(settings_changes, SettingSource::QUERY);
         context->applySettingsChanges(settings_changes);
+
+        if (!roles.empty())
+        {
+            if (context->getSettingsRef()[Setting::force_settings_profile_on_set_role])
+            {
+                const UInt64 readonly = context->getSettingsRef()[Setting::readonly];
+                if (readonly != 0)
+                    throw Exception(
+                        ErrorCodes::READONLY,
+                        "Cannot set roles in readonly mode when force_settings_profile_on_set_role is set (readonly = {})",
+                        readonly);
+
+                // Grants are checked inside the helper.
+                auto new_roles = context->getAccessControl().getIDs<Role>(roles);
+                InterpreterSetRoleQuery::applySettingsProfileAndSetCurrentRoles(*context, new_roles);
+            }
+            else
+            {
+                context->setCurrentRoles(roles);
+            }
+        }
 
         /// Set the query id supplied by the user, if any, and also update the OpenTelemetry fields.
         String query_id = params->get("query_id", request.get("X-ClickHouse-Query-Id", ""));

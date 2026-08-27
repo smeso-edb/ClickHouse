@@ -644,6 +644,8 @@ curl -sS "http://localhost:8123?role=my_role&role=my_other_role" --data-binary "
 
 In this case, `?role=my_role&role=my_other_role` works similarly to executing `SET ROLE my_role, my_other_role` before the statement.
 
+When the [`force_settings_profile_on_set_role`](/reference/settings/session-settings/force#force_settings_profile_on_set_role) setting is enabled, the settings profile of the roles given via `role` parameters is applied to the request's query context for the duration of that request only, mirroring the `SET ROLE` semantics. This overwrites other per-request settings, including response-shaping settings such as `default_format` / `output_format` and the `database` setting, and replaces the previous roles' constraints. If `readonly` is `1` or `2` on the query context — including the `readonly = 2` value that the HTTP interface implies for `GET`/`HEAD` requests — the request fails with a `READONLY` error.
+
 ## HTTP response codes caveats {#http_response_codes_caveats}
 
 Because of limitations of the HTTP protocol, a HTTP 200 response code doesn't guarantee that a query was successful.

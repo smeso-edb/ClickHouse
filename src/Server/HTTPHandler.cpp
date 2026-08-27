@@ -2,6 +2,7 @@
 #include <Server/HTTPQueryConstructor.h>
 
 #include <Access/AccessControl.h>
+#include <Access/Role.h>
 #include <Compression/CompressedReadBuffer.h>
 #include <Compression/CompressedWriteBuffer.h>
 #include <Core/ExternalTable.h>
@@ -19,6 +20,7 @@
 #include <IO/ReadBufferFromString.h>
 #include <IO/WriteHelpers.h>
 #include <IO/copyData.h>
+#include <Interpreters/Access/InterpreterSetRoleQuery.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/DatabaseCatalog.h>
 #include <Interpreters/TableNameHints.h>
@@ -75,6 +77,7 @@ namespace Setting
     extern const SettingsBool add_http_cors_header;
     extern const SettingsBool cancel_http_readonly_queries_on_client_close;
     extern const SettingsBool enable_http_compression;
+    extern const SettingsBool force_settings_profile_on_set_role;
     extern const SettingsUInt64 http_headers_progress_interval_ms;
     extern const SettingsUInt64 http_max_request_param_data_size;
     extern const SettingsBool http_native_compression_disable_checksumming_on_decompress;
@@ -83,6 +86,8 @@ namespace Setting
     extern const SettingsBool http_write_exception_in_output_format;
     extern const SettingsInt64 http_zlib_compression_level;
     extern const SettingsUInt64 input_format_max_block_wait_ms;
+    extern const SettingsUInt64 max_parser_backtracks;
+    extern const SettingsUInt64 max_parser_depth;
     extern const SettingsUInt64 readonly;
     extern const SettingsBool send_progress_in_http_headers;
     extern const SettingsSnappyMode snappy_mode;
@@ -108,6 +113,7 @@ namespace ErrorCodes
 
     extern const int NO_ELEMENTS_IN_CONFIG;
 
+    extern const int READONLY;
     extern const int INVALID_SESSION_TIMEOUT;
     extern const int INVALID_CONFIG_PARAMETER;
     extern const int HTTP_LENGTH_REQUIRED;
@@ -305,9 +311,9 @@ void HTTPHandler::processQuery(
 
     /// === Authentication and user profile are applied first ===
     /// Authentication has already happened above (line `authenticateUser`); makeQueryContext()
-    /// loads the user's default profile. Auth-related parameters (role) are applied immediately
-    /// after, so that the resulting settings/constraints are in effect before we process any
-    /// general settings.
+    /// loads the user's default profile. The auth-related `role` parameter is collected here but
+    /// applied later, after the per-request settings, so that `force_settings_profile_on_set_role`
+    /// and `readonly` supplied as URL parameters are visible when the roles are switched.
     auto context = session->makeQueryContext();
 
     /// Expose the HTTP request URL and the SQL-defined handler name (if any) to the query
@@ -331,8 +337,6 @@ void HTTPHandler::processQuery(
     }
 
     auto roles = params.getAll("role");
-    if (!roles.empty())
-        context->setCurrentRoles(roles);
 
     /// POST always allows modifying queries. For SQL-defined handlers (which set `introspection_handler_name`)
     /// the mutating idempotent methods PUT and DELETE are allowed to modify data too, as decided per handler in
@@ -449,6 +453,45 @@ void HTTPHandler::processQuery(
 
     context->checkSettingsConstraints(settings_changes, SettingSource::QUERY);
     context->applySettingsChanges(settings_changes);
+
+    if (!roles.empty())
+    {
+        if (context->getSettingsRef()[Setting::force_settings_profile_on_set_role])
+        {
+            const UInt64 readonly = context->getSettingsRef()[Setting::readonly];
+            if (readonly != 0)
+                throw Exception(
+                    ErrorCodes::READONLY,
+                    "Cannot set roles in readonly mode when force_settings_profile_on_set_role is set (readonly = {})",
+                    readonly);
+
+            // A SQL-defined handler pins max_parser_depth/max_parser_backtracks to 0.
+            // applySettingsAndReplaceProfiles below resets every changed setting to its default.
+            // We save the current values and restore them later.
+            // Only needed when introspection_handler_name is set.
+            std::optional<UInt64> max_parser_depth_snapshot;
+            std::optional<UInt64> max_parser_backtracks_snapshot;
+            if (!introspection_handler_name.empty())
+            {
+                max_parser_depth_snapshot = context->getSettingsRef()[Setting::max_parser_depth].value;
+                max_parser_backtracks_snapshot = context->getSettingsRef()[Setting::max_parser_backtracks].value;
+            }
+
+            // Grants are checked inside the helper.
+            auto new_roles = context->getAccessControl().getIDs<Role>(roles);
+            InterpreterSetRoleQuery::applySettingsProfileAndSetCurrentRoles(*context, new_roles);
+
+            if (!introspection_handler_name.empty())
+            {
+                context->setSetting("max_parser_depth", *max_parser_depth_snapshot);
+                context->setSetting("max_parser_backtracks", *max_parser_backtracks_snapshot);
+            }
+        }
+        else
+        {
+            context->setCurrentRoles(roles);
+        }
+    }
 
     const auto & settings = context->getSettingsRef();
 

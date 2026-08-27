@@ -1212,6 +1212,12 @@ public:
     void applySettingChange(const SettingChange & change);
     void applySettingsChanges(const SettingsChanges & changes);
 
+    /// Resets every currently changed setting to its default value, then applies `changes`,
+    /// and finally replaces the effective constraints and current profile IDs
+    void applySettingsAndReplaceProfiles(
+        const SettingsChanges & changes,
+        std::shared_ptr<const SettingsConstraintsAndProfileIDs> constraints_and_profiles);
+
     /// Checks the constraints.
     void checkSettingsConstraints(const AlterSettingsProfileElements & profile_elements, SettingSource source);
     void checkSettingsConstraints(const SettingChange & change, SettingSource source);
